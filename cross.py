@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
-import plotly.graph_objects as go
 from sklearn.datasets import load_digits
 from sklearn.model_selection import cross_val_score
 from sklearn.linear_model import LogisticRegression
@@ -44,8 +43,9 @@ else:
     uploaded_file = st.sidebar.file_uploader("Upload CSV", type="csv")
     if uploaded_file:
         df_data = pd.read_csv(uploaded_file)
-        X = df_data.drop(columns=['target']).select_dtypes(include=[np.number]).fillna(0).values
-        y = df_data['target'].values if 'target' in df_data else np.zeros(len(df_data))
+        feature_cols = [col for col in df_data.columns if col != 'target']
+        X = df_data[feature_cols].select_dtypes(include=[np.number]).fillna(0).values
+        y = df_data['target'].values
     else:
         X, y = load_digits().data, load_digits().target
         df_data = pd.DataFrame(X)
@@ -58,12 +58,12 @@ col2.metric("Features", X.shape[1])
 col3.metric("Classes", len(np.unique(y)))
 
 st.subheader("📊 Dataset Preview")
-st.dataframe(df_data.head(), use_container_width=True)
+st.dataframe(df_data.head(), width="stretch")
 
-# Model selection
+# Model selection (FIXED for sklearn 1.8+)
 st.subheader("🤖 Select Models to Compare")
 models = {
-    "Logistic Regression": LogisticRegression(solver='liblinear', multi_class='ovr', max_iter=1000),
+    "Logistic Regression": LogisticRegression(solver='liblinear', max_iter=1000),
     "SVM": SVC(gamma='auto'),
     "Random Forest (n=40)": RandomForestClassifier(n_estimators=40, random_state=42)
 }
@@ -76,31 +76,32 @@ if st.button("🚀 Run Cross-Validation", type="primary"):
     
     kf = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
     
-    for name, model in models.items():
-        if name in selected_models:
-            scores = cross_val_score(model, X, y, cv=kf, n_jobs=-1)
-            results[name] = {
-                'scores': scores,
-                'mean': np.mean(scores),
-                'std': np.std(scores)
-            }
+    with st.spinner("Running CV..."):
+        for name, model in models.items():
+            if name in selected_models:
+                scores = cross_val_score(model, X, y, cv=kf, n_jobs=-1)
+                results[name] = {
+                    'scores': scores,
+                    'mean': np.mean(scores),
+                    'std': np.std(scores)
+                }
     
     # Results table
     st.subheader("📈 Cross-Validation Results")
     results_df = pd.DataFrame({
-        'Model': [name for name in results],
+        'Model': list(results.keys()),
         'Mean CV Score': [f"{results[name]['mean']:.3f} ± {results[name]['std']:.3f}" for name in results],
         'Best Score': [f"{np.max(results[name]['scores']):.3f}" for name in results],
         'Worst Score': [f"{np.min(results[name]['scores']):.3f}" for name in results]
     })
-    st.dataframe(results_df, use_container_width=True)
+    st.dataframe(results_df, width="stretch")
     
     # Best model
-    best_model = max(results.items(), key=lambda x: x[1]['mean'])
-    st.success(f"🏆 **Best Model**: {best_model[0]} ({best_model[1]['mean']:.3f})")
+    best_model_name = max(results, key=lambda k: results[k]['mean'])
+    st.success(f"🏆 **Best Model**: {best_model_name} ({results[best_model_name]['mean']:.3f})")
     
-    # Bar chart comparison
-    st.subheader("📊 Mean CV Scores Comparison")
+    # Bar chart
+    st.subheader("📊 Mean CV Scores")
     fig_bar = px.bar(
         x=list(results.keys()), 
         y=[results[name]['mean'] for name in results],
@@ -111,7 +112,7 @@ if st.button("🚀 Run Cross-Validation", type="primary"):
     fig_bar.update_layout(paper_bgcolor="#1a1d24", plot_bgcolor="#1a1d24")
     st.plotly_chart(fig_bar, use_container_width=True)
     
-    # Individual score distributions
+    # Fold scores plot
     st.subheader("📈 Individual Fold Scores")
     fig_scores, ax = plt.subplots(figsize=(12, 6), facecolor='#1a1d24')
     for i, (name, res) in enumerate(results.items()):
@@ -126,26 +127,19 @@ if st.button("🚀 Run Cross-Validation", type="primary"):
     plt.tight_layout()
     st.pyplot(fig_scores)
 
-# Parameter tuning example (Random Forest)
-st.subheader("🔧 Parameter Tuning Demo")
-st.info("Tune Random Forest `n_estimators` using 10-fold CV")
+# Parameter tuning
+st.subheader("🔧 Parameter Tuning (Random Forest)")
 n_estimators = st.slider("n_estimators", 5, 100, 40, 5)
 
-if st.button("Test n_estimators"):
+if st.button("Test n_estimators", key="tune"):
     rf_model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
     scores = cross_val_score(rf_model, X, y, cv=10, n_jobs=-1)
-    st.metric("Mean CV Score", f"{np.mean(scores):.3f} ± {np.std(scores):.3f}")
-    
-    col1, col2 = st.columns(2)
-    col1.metric("Best Fold", f"{np.max(scores):.3f}")
-    col2.metric("Worst Fold", f"{np.min(scores):.3f}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Mean CV", f"{np.mean(scores):.3f}")
+    col2.metric("± Std", f"{np.std(scores):.3f}")
+    col3.metric("Best Fold", f"{np.max(scores):.3f}")
 
-# Download results
-if 'results_df' in locals():
-    csv = results_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="💾 Download Results",
-        data=csv,
-        file_name="cv_results.csv",
-        mime="text/csv"
-    )
+# Download
+if st.session_state.get('results_df', None):
+    csv = st.session_state.results_df.to_csv(index=False).encode('utf-8')
+    st.download_button("💾 Download Results", csv, "cv_results.csv", "text/csv")
